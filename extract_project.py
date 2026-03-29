@@ -173,6 +173,35 @@ def _md_table(headers: list[str], rows: list[list]) -> str:
     return f"\n{head}\n{sep}\n{body}\n"
 
 
+import re as _re
+
+# Patterns for Jira automation UI button labels that leak into scraped text
+_UI_NOISE_PHRASES = _re.compile(
+    r'\s*\b(?:Duplicate\s+Delete|Change\s+trigger|Add\s+component)\b\s*', _re.I)
+_UI_NOISE_TRAILING = _re.compile(
+    r'(?:\s+(?:Duplicate|Delete|Edit|Copy|Move))+\s*$', _re.I)
+_UI_NOISE_SOLO = _re.compile(
+    r'(?:^|\s)(?:Duplicate|Delete|Edit|Copy|Move)(?:\s|$)', _re.I)
+
+
+_DEDUP_PHRASES = _re.compile(
+    r'\b([\w][\w-]*(?:\s+[\w][\w-]*){0,2})\s+\1\b', _re.I)
+
+def _clean_ui_noise(text: str) -> str:
+    """Strip Jira UI button labels (Duplicate, Delete, Change trigger, etc.)
+    that bleed into scraped automation rule text, and remove consecutive
+    duplicate phrases like 'Sub-task Sub-task' → 'Sub-task'."""
+    if not text or text == '—':
+        return text
+    text = _UI_NOISE_PHRASES.sub(' ', text)
+    text = _UI_NOISE_TRAILING.sub('', text)
+    text = _UI_NOISE_SOLO.sub(' ', text)
+    # Remove consecutive duplicate 1-3 word phrases caused by
+    # TreeWalker picking up icon labels alongside their text content
+    text = _DEDUP_PHRASES.sub(r'\1', text)
+    return ' '.join(text.split()).strip()
+
+
 def _safe(obj, attr, default="N/A"):
     val = getattr(obj, attr, default)
     return val if val else default
@@ -686,6 +715,8 @@ def fetch_project_architecture(project_key: str) -> dict | None:
                 from selenium.webdriver.chrome.options import Options as ChromeOptions
                 from selenium.webdriver.chrome.service import Service as ChromeService
                 from selenium.webdriver.common.by import By
+                from selenium.webdriver.common.keys import Keys
+                from selenium.webdriver.common.action_chains import ActionChains
                 from selenium.webdriver.support.ui import WebDriverWait
                 from selenium.webdriver.support import expected_conditions as EC
                 from webdriver_manager.chrome import ChromeDriverManager
@@ -706,29 +737,120 @@ def fetch_project_architecture(project_key: str) -> dict | None:
 
                 def _login_with_password(drv):
                     """Try Atlassian email+password login. Returns True on success."""
+                    if not JIRA_EMAIL or not JIRA_PASSWORD:
+                        print(f"    ⚠ Missing credentials: "
+                              f"email={'set' if JIRA_EMAIL else 'EMPTY'}, "
+                              f"password={'set' if JIRA_PASSWORD else 'EMPTY'}")
+                        return False
+
                     jira_host = urlparse(JIRA_SERVER).hostname.lower()
+                    print(f"    → Navigating to {JIRA_SERVER}/login")
                     drv.get(f"{JIRA_SERVER}/login")
                     try:
-                        wait = WebDriverWait(drv, 20)
-                        # Email field
-                        email_el = wait.until(EC.presence_of_element_located(
-                            (By.ID, 'username')))
-                        email_el.clear()
-                        email_el.send_keys(JIRA_EMAIL)
-                        drv.find_element(By.ID, 'login-submit').click()
-                        # Password field
-                        pwd_el = wait.until(EC.presence_of_element_located(
-                            (By.ID, 'password')))
-                        pwd_el.clear()
-                        pwd_el.send_keys(JIRA_PASSWORD)
-                        drv.find_element(By.ID, 'login-submit').click()
-                        # Wait until we're on the actual Jira site (not login pages)
                         wait = WebDriverWait(drv, 30)
-                        wait.until(lambda d: urlparse(d.current_url).hostname == jira_host)
-                        time.sleep(3)
+
+                        # ── Email step ─────────────────────────────
+                        print(f"    → Waiting for username field…")
+                        # Jira uses random-suffixed IDs like "username-uid1"
+                        # so we match on data-testid or name instead.
+                        email_el = wait.until(EC.element_to_be_clickable(
+                            (By.CSS_SELECTOR,
+                             '[data-testid="username"], '
+                             'input[name="username"], '
+                             'input[autocomplete="username"], '
+                             '#username')))
+
+                        # Click to focus, then type
+                        email_el.click()
+                        email_el.clear()
+                        print(f"    → Typing email: {JIRA_EMAIL[:5]}***")
+                        email_el.send_keys(JIRA_EMAIL)
+
+                        # Verify the value was typed
+                        typed = email_el.get_attribute('value') or ''
+                        if not typed:
+                            # Fallback: use ActionChains for key input
+                            print("    → send_keys empty, retrying with ActionChains…")
+                            email_el.click()
+                            ActionChains(drv).pause(0.2)\
+                                .send_keys(JIRA_EMAIL).perform()
+                            time.sleep(0.3)
+                            typed = email_el.get_attribute('value') or ''
+
+                        if not typed:
+                            print(f"    ⚠ Could not type email into username field")
+                            return False
+                        print(f"    → Email field value: {typed[:5]}***")
+
+                        # Submit email
+                        print("    → Submitting email…")
+                        try:
+                            drv.find_element(
+                                By.CSS_SELECTOR,
+                                '[data-testid="login-submit"], '
+                                '#login-submit, '
+                                'button[type="submit"]'
+                            ).click()
+                        except Exception:
+                            email_el.send_keys(Keys.RETURN)
+
+                        # ── Password step ──────────────────────────
+                        # WebDriverWait handles the page transition — no fixed sleep needed
+                        print("    → Waiting for password field…")
+                        pwd_el = wait.until(EC.element_to_be_clickable(
+                            (By.CSS_SELECTOR,
+                             '[data-testid="password"], '
+                             'input[name="password"], '
+                             'input[autocomplete="current-password"], '
+                             '#password')))
+
+                        pwd_el.click()
+                        pwd_el.clear()
+                        print("    → Typing password…")
+                        pwd_el.send_keys(JIRA_PASSWORD)
+
+                        # Verify
+                        typed_pw = pwd_el.get_attribute('value') or ''
+                        if not typed_pw:
+                            print("    → send_keys empty, retrying with ActionChains…")
+                            pwd_el.click()
+                            ActionChains(drv).pause(0.2)\
+                                .send_keys(JIRA_PASSWORD).perform()
+                            time.sleep(0.3)
+
+                        # Submit password
+                        print("    → Submitting password…")
+                        try:
+                            drv.find_element(
+                                By.CSS_SELECTOR,
+                                '[data-testid="login-submit"], '
+                                '#login-submit, '
+                                'button[type="submit"]'
+                            ).click()
+                        except Exception:
+                            pwd_el.send_keys(Keys.RETURN)
+
+                        # ── Wait for Jira redirect ─────────────────
+                        print("    → Waiting for Jira redirect…")
+                        wait = WebDriverWait(drv, 30)
+                        wait.until(lambda d: (
+                            urlparse(d.current_url).hostname or ''
+                        ).lower() == jira_host)
+                        # Wait for Jira SPA to render (lightweight check)
+                        try:
+                            WebDriverWait(drv, 10).until(
+                                lambda d: d.execute_script(
+                                    "return document.readyState") == 'complete')
+                        except Exception:
+                            time.sleep(1)
                         return True
                     except Exception as e:
-                        print(f"    ⚠ Password login failed: {str(e).splitlines()[0][:80]}")
+                        print(f"    ⚠ Password login failed: "
+                              f"{str(e).splitlines()[0][:80]}")
+                        try:
+                            print(f"    ⚠ Current URL: {drv.current_url[:80]}")
+                        except Exception:
+                            pass
                         return False
 
                 def _wait_for_manual_login(drv):
@@ -761,11 +883,11 @@ def fetch_project_architecture(project_key: str) -> dict | None:
                                 );
                             """)
                             if is_jira:
-                                time.sleep(3)  # let the SPA settle
+                                time.sleep(1)  # brief SPA settle
                                 return True
                         except Exception:
                             pass
-                        time.sleep(2)
+                        time.sleep(1.5)
                     return False
 
                 # ── Attempt login ─────────────────────────────────────
@@ -796,16 +918,16 @@ def fetch_project_architecture(project_key: str) -> dict | None:
 
                         # Poll until the rules table actually renders (up to 30s)
                         print("    ⏳ Waiting for rules table to load…")
-                        table_deadline = time.time() + 30
-                        row_count = 0
-                        while time.time() < table_deadline:
-                            row_count = driver.execute_script(
-                                "return document.querySelectorAll('table tbody tr').length"
-                            ) or 0
-                            if row_count > 0:
-                                break
-                            time.sleep(2)
-                        time.sleep(2)  # extra settle time
+                        try:
+                            WebDriverWait(driver, 30).until(
+                                lambda d: (d.execute_script(
+                                    "return document.querySelectorAll("
+                                    "'table tbody tr').length") or 0) > 0)
+                        except Exception:
+                            pass
+                        row_count = driver.execute_script(
+                            "return document.querySelectorAll("
+                            "'table tbody tr').length") or 0
                         print(f"    → On: {driver.current_url[:80]}")
                         print(f"    → Table rows in DOM: {row_count}")
 
@@ -836,127 +958,786 @@ def fetch_project_architecture(project_key: str) -> dict | None:
                         list_rules = driver.execute_script(list_js) or []
                         print(f"    → {len(list_rules)} unique rule(s) found")
 
-                        # ── Click into each rule for details ──────────
+                        # ── JS for extracting config from opened panel ─
+                        # Targets actual Jira Automation DOM containers:
+                        #   [class*="component-form"] form  (Edit work item)
+                        #   [class*="create-issue-config"]  (Create work item)
+                        #   [class*="rule-component-configure"] (config header)
+                        EXTRACT_PANEL_JS = r"""
+                        return (function() {
+                            const result = {fields:[], raw_text:'', debug:''};
+                            let panel = null;
+
+                            // P1: Form inside the component-form / create-issue
+                            // containers — these are the EXACT wrappers Jira uses
+                            panel = document.querySelector(
+                                '[class*="component-form"] form,' +
+                                '[class*="FormContainer"] form,' +
+                                '[class*="create-issue-config"] form');
+
+                            // P2: form near the rule-component-configure header
+                            if (!panel) {
+                                const hdr = document.querySelector(
+                                    '[class*="rule-component-configure"]');
+                                if (hdr) {
+                                    const sec = hdr.closest('section');
+                                    if (sec) panel = sec.querySelector('form')
+                                                     || sec;
+                                }
+                            }
+
+                            // P3: form inside independent-scrolling section
+                            if (!panel) {
+                                document.querySelectorAll(
+                                    'section[class*="independent-scrolling"]'
+                                ).forEach(s => {
+                                    if (panel) return;
+                                    const f = s.querySelector('form');
+                                    if (f) {
+                                        const r = f.getBoundingClientRect();
+                                        if (r.width>100 && r.height>100)
+                                            panel = f;
+                                    }
+                                });
+                            }
+
+                            // P4: any visible form with ≥1 label
+                            if (!panel) {
+                                document.querySelectorAll('form').forEach(f=>{
+                                    if (panel) return;
+                                    if (f.querySelectorAll('label').length>=1){
+                                        const r = f.getBoundingClientRect();
+                                        if (r.width>150 && r.height>100)
+                                            panel = f;
+                                    }
+                                });
+                            }
+
+                            // P5: the section itself (for non-form panels)
+                            if (!panel) {
+                                document.querySelectorAll(
+                                    'section[class*="independent-scrolling"]'
+                                ).forEach(s => {
+                                    if (panel) return;
+                                    const r = s.getBoundingClientRect();
+                                    if (r.width>200 && r.height>200)
+                                        panel = s;
+                                });
+                            }
+
+                            if (!panel) {
+                                result.raw_text = '(panel not found)';
+                                result.debug = 'NO_PANEL';
+                                return result;
+                            }
+
+                            result.debug = panel.tagName + '.' +
+                                (panel.className||'').substring(0,60);
+
+                            // ── EXPAND collapsed "More options" ──
+                            try {
+                                panel.querySelectorAll(
+                                    '[aria-expanded="false"]'
+                                ).forEach(exp => {
+                                    const t = (exp.textContent||'').trim();
+                                    if (/more\s*options/i.test(t))
+                                        exp.click();
+                                });
+                            } catch(e) {}
+
+                            const seen = new Set();
+                            const DEDUP = /\b([\w][\w-]*(?:\s+[\w][\w-]*){0,2})\s+\1\b/gi;
+
+                            // ── STRATEGY A: label → parentElement ──
+                            panel.querySelectorAll('label').forEach(lbl => {
+                                let lt = lbl.textContent.trim()
+                                    .replace(/\s+/g, ' ')
+                                    .replace(/\s*\*\s*(\(required\))?/gi,'')
+                                    .replace(/\s*\(optional\)/gi,'')
+                                    .trim();
+                                if (!lt || lt.length>60 ||
+                                    seen.has(lt.toLowerCase())) return;
+
+                                const ctr = lbl.parentElement;
+                                if (!ctr) return;
+
+                                let val = '';
+
+                                // 1. Text input (skip hidden/checkbox/combobox)
+                                if (!val) {
+                                    const inp = ctr.querySelector(
+                                        'input' +
+                                        ':not([type="hidden"])' +
+                                        ':not([type="checkbox"])' +
+                                        ':not([role="combobox"])' +
+                                        ':not([class*="ak-select"])');
+                                    if (inp) val = inp.value
+                                        || inp.getAttribute('value') || '';
+                                }
+
+                                // 1b. Checkbox / toggle
+                                if (!val) {
+                                    const cb = ctr.querySelector(
+                                        'input[type="checkbox"]');
+                                    if (cb) val = cb.checked ? 'Yes' : 'No';
+                                }
+
+                                // 2. Textarea
+                                if (!val) {
+                                    const ta = ctr.querySelector('textarea');
+                                    if (ta) val = ta.value
+                                        || ta.textContent.trim()
+                                        || ta.getAttribute('placeholder')
+                                        || '';
+                                }
+
+                                // 3. Contenteditable
+                                if (!val) {
+                                    const ce = ctr.querySelector(
+                                        '[contenteditable="true"]');
+                                    if (ce) val = ce.textContent.trim();
+                                }
+
+                                // 4. ADS dropdown single value
+                                if (!val) {
+                                    const sv = ctr.querySelector(
+                                        '.ak-select__single-value,' +
+                                        '[class*="singleValue"],' +
+                                        '[class*="SingleValue"]');
+                                    if (sv) {
+                                        const lc = sv.querySelector(
+                                            '[class*="LabelContainer"]');
+                                        val = lc
+                                            ? lc.textContent.trim()
+                                            : sv.textContent.trim();
+                                    }
+                                }
+
+                                // 5. ADS multi-value tags
+                                if (!val) {
+                                    const tags = ctr.querySelectorAll(
+                                        '.ak-select__multi-value__label,' +
+                                        '[class*="multiValue__label"]');
+                                    if (tags.length)
+                                        val = Array.from(tags)
+                                            .map(t=>t.textContent.trim())
+                                            .filter(t=>t).join(', ');
+                                }
+
+                                // 6. Hidden input
+                                if (!val) {
+                                    const h = ctr.querySelector(
+                                        'input[type="hidden"]');
+                                    if (h && h.value) val = h.value;
+                                }
+
+                                // 7. Buttons showing selected value
+                                if (!val) {
+                                    ctr.querySelectorAll('button').forEach(
+                                        btn => {
+                                        if (val) return;
+                                        const t = (btn.textContent||'').trim();
+                                        const fl = (t.split('\n')[0]||'').trim();
+                                        if (fl && fl.length>1 && fl.length<100
+                                            && !/^(Add|Remove|Clear|×|X|Save|Cancel|Delete|Duplicate|Choose|Select|Show|Back|Next|Configure|open)/i.test(fl)
+                                            && !btn.contains(lbl))
+                                            val = fl;
+                                    });
+                                }
+
+                                // 8. Sibling text
+                                if (!val) {
+                                    for (const ch of ctr.children) {
+                                        if (ch===lbl||ch.contains(lbl)
+                                            ||lbl.contains(ch)) continue;
+                                        const t = ch.textContent.trim();
+                                        if (t && t.length>0 && t.length<200
+                                            && !/^(Required|Optional|\*|Choose fields)/i.test(t)){
+                                            val = t; break;
+                                        }
+                                    }
+                                }
+
+                                val = val.replace(DEDUP, '$1').trim();
+                                if (val) {
+                                    seen.add(lt.toLowerCase());
+                                    result.fields.push(
+                                        {field: lt, value: val});
+                                }
+                            });
+
+                            // ── STRATEGY A2: orphan inputs (no <label> parent) ──
+                            // Condition blocks have text inputs with
+                            // aria-labelledby or name but no wrapping <label>.
+                            panel.querySelectorAll(
+                                'input[data-ds--text-field--input],' +
+                                'input[type="text"]:not([role="combobox"])' +
+                                ':not([class*="ak-select"])'
+                            ).forEach(inp => {
+                                const val = (inp.value || '').trim();
+                                if (!val || val.length > 500) return;
+                                // Skip if already captured
+                                if (result.fields.some(
+                                    f => f.value === val)) return;
+
+                                // Determine label
+                                let lt = '';
+                                const lblId = inp.getAttribute(
+                                    'aria-labelledby');
+                                if (lblId) {
+                                    const lblEl = document.getElementById(
+                                        lblId);
+                                    if (lblEl) lt = lblEl.textContent.trim()
+                                        .replace(/\s*\*\s*(\(required\))?/gi,'')
+                                        .replace(/\s*\(optional\)/gi,'')
+                                        .trim();
+                                }
+                                // If inside a tabpanel, use the tab label
+                                if (!lt) {
+                                    const tp = inp.closest(
+                                        '[role="tabpanel"]');
+                                    if (tp) {
+                                        const tid = tp.getAttribute(
+                                            'aria-labelledby');
+                                        if (tid) {
+                                            const tab = document.getElementById(
+                                                tid);
+                                            if (tab) lt =
+                                                tab.textContent.trim();
+                                        }
+                                    }
+                                }
+                                if (!lt) {
+                                    lt = inp.getAttribute('name')
+                                        || inp.getAttribute('placeholder')
+                                        || '';
+                                    // Clean prefixes like "condition-"
+                                    lt = lt.replace(/^condition-/i, '');
+                                }
+                                if (lt) lt = lt.charAt(0).toUpperCase()
+                                    + lt.slice(1);
+                                if (!lt || seen.has(lt.toLowerCase())) return;
+                                seen.add(lt.toLowerCase());
+                                result.fields.push({field: lt,
+                                    value: val.replace(DEDUP, '$1').trim()});
+                            });
+
+                            // ── Condition block: match type selector ──
+                            panel.querySelectorAll(
+                                '[class*="MatchTypeSelector"]'
+                            ).forEach(sel => {
+                                // The active button has a visually distinct
+                                // class; detect via aria-pressed or by
+                                // comparing CSS classes (active = different)
+                                const btns = sel.querySelectorAll('button');
+                                if (btns.length >= 2) {
+                                    // First button is the primary style when
+                                    // active; pick the one whose class list
+                                    // differs (Jira sets a different class)
+                                    const classes = Array.from(btns).map(
+                                        b => b.className);
+                                    let activeText = '';
+                                    for (const b of btns) {
+                                        // Check for aria-pressed or bold style
+                                        if (b.getAttribute('aria-pressed')
+                                            === 'true') {
+                                            activeText = b.textContent.trim();
+                                            break;
+                                        }
+                                    }
+                                    if (!activeText) {
+                                        // Fallback: distinct class = active
+                                        const freq = {};
+                                        classes.forEach(c => {
+                                            freq[c] = (freq[c]||0) + 1;});
+                                        for (let i=0; i<btns.length; i++) {
+                                            if (freq[classes[i]] === 1) {
+                                                activeText =
+                                                    btns[i].textContent.trim();
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (!activeText)
+                                        activeText =
+                                            btns[0].textContent.trim();
+                                    const mk = 'match type';
+                                    if (!seen.has(mk)) {
+                                        seen.add(mk);
+                                        result.fields.push({
+                                            field: 'Match type',
+                                            value: activeText});
+                                    }
+                                }
+                            });
+
+                            // ── STRATEGY B: <p> headers ──
+                            // (skip long descriptions / Jira help text)
+                            const DESC_NOISE = /^(Checks whether|Find out about|The else block|executes the|This condition|This action|This trigger|Restrict the|Limit the|Choose what|Specify the|Select the|Creates? a |Transitions? |Sets? the |Sends? |Logs? )/i;
+                            panel.querySelectorAll('p').forEach(p => {
+                                const raw = p.textContent.trim();
+                                const mm = raw.match(
+                                    /^(.+?)[\s*]*(?:\(required\)|\(optional\))?$/i);
+                                if (!mm) return;
+                                const fn = mm[1].replace(/\s*\*\s*$/,'').trim();
+                                if (!fn||fn.length<2||fn.length>50
+                                    ||seen.has(fn.toLowerCase())) return;
+                                if (DESC_NOISE.test(fn)) return;
+                                let next = p.nextElementSibling;
+                                let att = 0;
+                                while (next && att<3) {
+                                    const el = next.querySelector(
+                                        'input,textarea,[contenteditable],select');
+                                    if (el) {
+                                        let v = el.value||el.textContent.trim();
+                                        if (v && v.length<300) {
+                                            v = v.replace(DEDUP,'$1');
+                                            seen.add(fn.toLowerCase());
+                                            result.fields.push(
+                                                {field:fn, value:v});
+                                            break;
+                                        }
+                                    }
+                                    const sv = next.querySelector(
+                                        '.ak-select__single-value,' +
+                                        '[class*="singleValue"]');
+                                    if (sv) {
+                                        const lc = sv.querySelector(
+                                            '[class*="LabelContainer"]');
+                                        const v = lc
+                                            ? lc.textContent.trim()
+                                            : sv.textContent.trim();
+                                        if (v) {
+                                            seen.add(fn.toLowerCase());
+                                            result.fields.push(
+                                                {field:fn, value:v});
+                                            break;
+                                        }
+                                    }
+                                    next = next.nextElementSibling;
+                                    att++;
+                                }
+                            });
+
+                            // ── STRATEGY C: Code / JSON editors ──
+                            panel.querySelectorAll(
+                                'textarea, pre, code, [class*="code" i]'
+                            ).forEach(el => {
+                                const text = (el.value
+                                    ||el.textContent||'').trim();
+                                if (!text||text.length<5) return;
+                                if (result.fields.some(
+                                    f=>f.value.includes(
+                                        text.substring(0,20)))) return;
+                                let label = 'Additional fields';
+                                let prev = el.parentElement;
+                                let at2 = 0;
+                                while (prev && at2<5) {
+                                    const ps = prev.previousElementSibling;
+                                    if (ps) {
+                                        const t = ps.textContent.trim();
+                                        if (t && t.length<40) {
+                                            label = t; break;
+                                        }
+                                    }
+                                    prev = prev.parentElement;
+                                    at2++;
+                                }
+                                if (!seen.has(label.toLowerCase())) {
+                                    seen.add(label.toLowerCase());
+                                    result.fields.push({field:label,
+                                        value:text.substring(0,500)});
+                                }
+                            });
+
+                            // ── STRATEGY D: TreeWalker fallback ──
+                            if (result.fields.length === 0) {
+                                const wk = document.createTreeWalker(
+                                    panel, NodeFilter.SHOW_TEXT);
+                                const pts = [];
+                                let nd;
+                                while (nd = wk.nextNode()) {
+                                    const t = nd.textContent.trim();
+                                    if (t && t.length>0) pts.push(t);
+                                }
+                                const noise = /^(Save|Cancel|Close|Duplicate|Delete|Edit|Back|OK|Done|Next|Change trigger|Add component|More options|Choose fields to set|Show smart value panel|Select operation|open|Configure|Learn More|Expand|Send an email)$/i;
+                                const ln = pts.filter(
+                                    t=>t.length>1 && !noise.test(t));
+                                const usedIdx = new Set();
+                                for (let i=0;i<ln.length;i++) {
+                                    const mx = ln[i].match(
+                                        /^([A-Z][^:]{1,50}):\s*(.+)$/i);
+                                    if (mx) {
+                                        result.fields.push({
+                                            field:mx[1].trim(),
+                                            value:mx[2].trim()});
+                                        usedIdx.add(i);
+                                    }
+                                }
+                                for (let i=0;i<ln.length-1;i++) {
+                                    if (usedIdx.has(i)) continue;
+                                    if (ln[i].length<=40 &&
+                                        ln[i+1].length>=ln[i].length) {
+                                        result.fields.push({
+                                            field:ln[i],value:ln[i+1]});
+                                        usedIdx.add(i);
+                                        usedIdx.add(i+1);
+                                        i++;
+                                    }
+                                }
+                                let di = 1;
+                                for (let i=0;i<ln.length;i++) {
+                                    if (usedIdx.has(i)) continue;
+                                    if (ln[i].length>3 && ln[i].length<300){
+                                        result.fields.push({
+                                            field:'Detail '+di,
+                                            value:ln[i]});
+                                        di++;
+                                    }
+                                }
+                                result.raw_text = ln.join(' | ');
+                            }
+
+                            return result;
+                        })()
+                        """
+
+                        # ── Click into each rule for deep extraction ──
                         for ri in list_rules:
                             rname = ri.get('name', '?')
                             rhref = ri.get('href', '')
                             enabled = ri.get('enabled', '')
-                            trigger = '—'
-                            conditions = '—'
-                            actions = '—'
+                            steps = []
 
                             if rhref:
                                 try:
                                     driver.get(rhref)
-                                    time.sleep(5)
 
-                                    detail = driver.execute_script(r"""
-                                    const res = {trigger:'', conditions:[], actions:[], enabled:''};
+                                    # Wait until workflow components render (up to 16s)
+                                    try:
+                                        WebDriverWait(driver, 16, poll_frequency=0.5).until(
+                                            lambda d: (d.execute_script(
+                                                "return document.querySelectorAll("
+                                                "'[data-testid=\"rule-workflow-component\"]'"
+                                                ").length") or 0) > 0)
+                                    except Exception:
+                                        pass
+                                    comp_count = driver.execute_script(
+                                        "return document.querySelectorAll("
+                                        "'[data-testid=\"rule-workflow-component\"]'"
+                                        ").length") or 0
 
-                                    // Clean UI noise from scraped text
-                                    function clean(text) {
-                                        return text
-                                            .replace(/\s*(Duplicate|Delete|Change trigger|Add component|Edit|Copy|Move)\s*/gi, ' ')
-                                            .replace(/\s+/g, ' ')
-                                            .trim();
+                                    # Phase 1: enabled + component overview
+                                    overview = driver.execute_script(r"""
+                                    const res = {enabled:'', components:[]};
+                                    const tog = document.querySelector(
+                                        '[role="switch"]');
+                                    if (tog) res.enabled =
+                                        tog.getAttribute('aria-checked')==='true'
+                                        ? 'ENABLED' : 'DISABLED';
+                                    if (!res.enabled) {
+                                        const bt = document.body.innerText||'';
+                                        if (/\bENABLED\b/.test(bt))
+                                            res.enabled = 'ENABLED';
+                                        else if (/\bDISABLED\b/.test(bt))
+                                            res.enabled = 'DISABLED';
                                     }
-
-                                    // Detect enabled from the badge/label on the header
-                                    const header = document.body.innerText;
-                                    if (/\bENABLED\b/.test(header)) res.enabled = 'ENABLED';
-                                    else if (/\bDISABLED\b/.test(header)) res.enabled = 'DISABLED';
-                                    const tog = document.querySelector('[role="switch"]');
-                                    if (tog) res.enabled = tog.getAttribute('aria-checked')==='true' ? 'ENABLED':'DISABLED';
-
-                                    // Use the actual DOM structure
-                                    const components = document.querySelectorAll(
-                                        '[data-testid="rule-workflow-component"]');
-
-                                    components.forEach(comp => {
-                                        const btn = comp.querySelector('button[data-testid]');
-                                        const testId = btn ? btn.getAttribute('data-testid') : '';
-                                        // Get text only from the button content, not sibling menus
-                                        const text = clean(btn ? btn.innerText : comp.innerText);
-
-                                        if (testId.includes('TRIGGER') || testId.toLowerCase().includes('trigger')) {
-                                            // Remove "Condition applied ..." that bleeds in from a sibling
-                                            let t = text.replace(/^When:?\s*/i, '');
-                                            t = t.replace(/\s*Condition applied\b.*/i, '').trim();
-                                            res.trigger = t;
-                                        } else if (testId.includes('CONDITION') || testId.toLowerCase().includes('condition')) {
-                                            let c = text.replace(/^(If:?\s*|Condition applied:?\s*)/i, '').trim();
-                                            if (c) res.conditions.push(c);
-                                        } else {
-                                            let a = text.replace(/^(Then|And):?\s*/i, '').trim();
-                                            if (a) res.actions.push(a);
+                                    function nodeText(el) {
+                                        if (!el) return '';
+                                        const parts = [];
+                                        const w = document.createTreeWalker(
+                                            el, NodeFilter.SHOW_TEXT);
+                                        let n;
+                                        while (n = w.nextNode()) {
+                                            const t = n.textContent.trim();
+                                            if (t) parts.push(t);
                                         }
+                                        let text = parts.join(' ');
+                                        text = text.replace(
+                                            /\b(Duplicate|Delete|Edit|Copy|Move|Change trigger|Add component)\b/gi,
+                                            ' ');
+                                        text = text.replace(
+                                            /\b([\w][\w-]*(?:\s+[\w][\w-]*){0,2})\s+\1\b/gi,
+                                            '$1');
+                                        return text.replace(/\s+/g,' ').trim();
+                                    }
+                                    document.querySelectorAll(
+                                        '[data-testid="rule-workflow-component"]'
+                                    ).forEach((comp, idx) => {
+                                        const btn = comp.querySelector(
+                                            'button[data-testid]');
+                                        const tid = btn
+                                            ? btn.getAttribute('data-testid')
+                                            : '';
+                                        let type = 'ACTION';
+                                        if (/trigger/i.test(tid))
+                                            type = 'TRIGGER';
+                                        else if (/condition/i.test(tid))
+                                            type = 'CONDITION';
+                                        else if (/branch/i.test(tid))
+                                            type = 'BRANCH';
+                                        res.components.push({
+                                            index: idx, type: type,
+                                            testId: tid,
+                                            summary: nodeText(btn || comp)
+                                        });
                                     });
-
-                                    // Fallback: if no components found via data-testid,
-                                    // try the workflow list items
-                                    if (!res.trigger && components.length === 0) {
+                                    if (res.components.length === 0) {
                                         const items = document.querySelectorAll(
-                                            '[class*="rule-workflow"] li, [class*="RuleWorkflow"] li, ' +
-                                            'ol[class*="rule-workflow"] > li');
-                                        items.forEach(li => {
-                                            const t = li.innerText.replace(/\s+/g, ' ').trim();
+                                            '[class*="rule-workflow"] li, ' +
+                                            '[class*="RuleWorkflow"] li');
+                                        items.forEach((li, idx) => {
+                                            const t = nodeText(li);
                                             const lo = t.toLowerCase();
-                                            if (lo.startsWith('when')) {
-                                                res.trigger = t.replace(/^When:?\s*/i, '').trim();
-                                            } else if (lo.startsWith('if') || lo.startsWith('condition')) {
-                                                res.conditions.push(t.replace(/^(If|Condition[^:]*):?\s*/i, '').trim());
-                                            } else if (lo.startsWith('then') || lo.startsWith('and')) {
-                                                res.actions.push(t.replace(/^(Then|And):?\s*/i, '').trim());
-                                            }
+                                            let type = 'ACTION';
+                                            if (lo.startsWith('when'))
+                                                type = 'TRIGGER';
+                                            else if (lo.startsWith('if') ||
+                                                     lo.startsWith('condition'))
+                                                type = 'CONDITION';
+                                            res.components.push({
+                                                index: idx, type,
+                                                testId: '', summary: t
+                                            });
                                         });
                                     }
-
-                                    // Last fallback: parse innerText line by line
-                                    if (!res.trigger) {
-                                        const lines = document.body.innerText.split('\n').map(l=>l.trim()).filter(l=>l);
-                                        let phase = '';
-                                        for (const l of lines) {
-                                            const lo = l.toLowerCase();
-                                            if (/^when[:\s]/i.test(l) || lo === 'when') { phase='T'; if(l.length>6) res.trigger=l.replace(/^when:?\s*/i,''); continue; }
-                                            if (/^(if[:\s]|condition)/i.test(l)) { phase='C'; let v=l.replace(/^(if|condition[^:]*):?\s*/i,''); if(v) res.conditions.push(v); continue; }
-                                            if (/^(then|and)[:\s]/i.test(l) || lo==='then') { phase='A'; let v=l.replace(/^(then|and):?\s*/i,''); if(v) res.actions.push(v); continue; }
-                                            if (phase==='T' && !res.trigger && l.length>3 && l.length<200) res.trigger=l;
-                                            else if (phase==='C' && l.length>3 && l.length<200) res.conditions.push(l);
-                                            else if (phase==='A' && l.length>3 && l.length<200) res.actions.push(l);
-                                        }
-                                    }
-
                                     return res;
                                     """) or {}
 
-                                    trigger = detail.get('trigger','') or '—'
-                                    conds = [c for c in detail.get('conditions',[]) if c]
-                                    acts = [a for a in detail.get('actions',[]) if a]
-                                    conditions = '; '.join(conds[:5]) if conds else '—'
-                                    actions = '; '.join(acts[:5]) if acts else '—'
-                                    if detail.get('enabled'):
-                                        enabled = detail['enabled']
+                                    if overview.get('enabled'):
+                                        enabled = overview['enabled']
+                                    components = overview.get('components', [])
 
-                                    print(f"    ✓ '{rname}': "
-                                          f"[{'ON' if enabled=='ENABLED' else 'OFF'}] "
-                                          f"T={trigger[:40]} "
-                                          f"| {len(conds)}C {len(acts)}A")
+                                    # If 0 components found, the page may
+                                    # still be loading — retry once
+                                    if not components:
+                                        print(f"    → '{rname}': 0 components,"
+                                              f" retrying…")
+                                        try:
+                                            WebDriverWait(driver, 8, poll_frequency=0.5).until(
+                                                lambda d: (d.execute_script(
+                                                    "return document.querySelectorAll("
+                                                    "'[data-testid=\"rule-workflow-component\"]'"
+                                                    ").length") or 0) > 0)
+                                        except Exception:
+                                            pass
+                                        overview = driver.execute_script(
+                                            r"""
+                                            const res = {components:[]};
+                                            """ + r"""
+                                            function nodeText(el) {
+                                                if (!el) return '';
+                                                const parts = [];
+                                                const w = document.createTreeWalker(
+                                                    el, NodeFilter.SHOW_TEXT);
+                                                let n;
+                                                while (n = w.nextNode()) {
+                                                    const t = n.textContent.trim();
+                                                    if (t) parts.push(t);
+                                                }
+                                                let text = parts.join(' ');
+                                                text = text.replace(
+                                                    /\b(Duplicate|Delete|Edit|Copy|Move|Change trigger|Add component)\b/gi,
+                                                    ' ');
+                                                text = text.replace(
+                                                    /\b([\w][\w-]*(?:\s+[\w][\w-]*){0,2})\s+\1\b/gi,
+                                                    '$1');
+                                                return text.replace(/\s+/g,' ').trim();
+                                            }
+                                            document.querySelectorAll(
+                                                '[data-testid="rule-workflow-component"]'
+                                            ).forEach((comp, idx) => {
+                                                const btn = comp.querySelector(
+                                                    'button[data-testid]')
+                                                    || comp.querySelector('button');
+                                                const tid = btn
+                                                    ? btn.getAttribute('data-testid') || ''
+                                                    : '';
+                                                let type = 'ACTION';
+                                                if (/trigger/i.test(tid))
+                                                    type = 'TRIGGER';
+                                                else if (/condition/i.test(tid))
+                                                    type = 'CONDITION';
+                                                else if (/branch/i.test(tid))
+                                                    type = 'BRANCH';
+                                                res.components.push({
+                                                    index: idx, type: type,
+                                                    testId: tid,
+                                                    summary: nodeText(btn || comp)
+                                                });
+                                            });
+                                            return res;
+                                            """) or {}
+                                        components = overview.get(
+                                            'components', [])
+
+                                    print(f"    → '{rname}': "
+                                          f"{len(components)} component(s)")
+
+                                    # Phase 2: Click each component
+                                    for ci, comp in enumerate(components):
+                                        comp_summary = _clean_ui_noise(
+                                            comp.get('summary', ''))
+                                        step = {
+                                            'order':   ci + 1,
+                                            'type':    comp.get('type',
+                                                               'UNKNOWN'),
+                                            'summary': comp_summary,
+                                            'config':  [],
+                                        }
+
+                                        try:
+                                            # Click the component button.
+                                            # Use broad selectors: any button
+                                            # inside a workflow component, not
+                                            # just button[data-testid].
+                                            click_result = driver.execute_script(
+                                                """
+                                                const idx = arguments[0];
+                                                const btns = [];
+                                                document.querySelectorAll(
+                                                    '[data-testid="rule-workflow-component"]'
+                                                ).forEach(c => {
+                                                    // Try button with data-testid first
+                                                    let b = c.querySelector(
+                                                        'button[data-testid]');
+                                                    // Fallback: any button
+                                                    if (!b) b = c.querySelector('button');
+                                                    if (b) btns.push(b);
+                                                });
+                                                if (idx < btns.length) {
+                                                    btns[idx].scrollIntoView(
+                                                        {block:'center'});
+                                                    btns[idx].click();
+                                                    return {ok:true, total:btns.length};
+                                                }
+                                                return {ok:false, total:btns.length};
+                                                """, ci)
+
+                                            clicked = (click_result or {}).get('ok', False)
+                                            btn_count = (click_result or {}).get('total', 0)
+
+                                            if ci == 0:
+                                                print(f"      click: {clicked}, "
+                                                      f"{btn_count} btns found")
+
+                                            if clicked:
+                                                # Wait for config panel to
+                                                # appear (form or section)
+                                                try:
+                                                    WebDriverWait(driver, 4, poll_frequency=0.3).until(
+                                                        lambda d: d.execute_script("""
+                                                            return !!(
+                                                                document.querySelector('[class*="component-form"] form') ||
+                                                                document.querySelector('[class*="FormContainer"] form') ||
+                                                                document.querySelector('[class*="create-issue-config"] form') ||
+                                                                document.querySelector('[class*="rule-component-configure"]') ||
+                                                                document.querySelector('section[class*="independent-scrolling"] form')
+                                                            );
+                                                        """))
+                                                except Exception:
+                                                    pass
+
+                                                # Extract panel fields — try
+                                                # twice (second after expand)
+                                                config = {}
+                                                for _att in range(2):
+                                                    config = (
+                                                        driver.execute_script(
+                                                            EXTRACT_PANEL_JS
+                                                        ) or {})
+                                                    if config.get('fields'):
+                                                        break
+                                                    if config.get(
+                                                        'debug') == 'NO_PANEL':
+                                                        time.sleep(1)
+                                                        continue
+                                                    break
+
+                                                dbg = config.get('debug','')
+                                                nf = len(config.get(
+                                                    'fields', []))
+                                                if ci < 3:
+                                                    print(
+                                                        f"      step{ci+1}: "
+                                                        f"{dbg[:40]} "
+                                                        f"| {nf} flds")
+
+                                                if config.get('fields'):
+                                                    step['config'] = [
+                                                        {
+                                                          'field':
+                                                            _clean_ui_noise(
+                                                              f.get('field','')),
+                                                          'value':
+                                                            _clean_ui_noise(
+                                                              f.get('value','')),
+                                                        }
+                                                        for f in config[
+                                                            'fields']
+                                                        if f.get('field')
+                                                        and f.get('value')
+                                                    ]
+
+                                                if (not step['config']
+                                                      and config.get(
+                                                          'raw_text')
+                                                      and config['raw_text']
+                                                      != '(panel not found)'):
+                                                    step['config'] = [{
+                                                      'field': 'Details',
+                                                      'value':
+                                                        _clean_ui_noise(
+                                                          config['raw_text'
+                                                            ][:500]),
+                                                    }]
+
+                                            else:
+                                                if ci == 0:
+                                                    print(f"      ⚠ click failed, "
+                                                          f"idx={ci}")
+
+                                        except Exception as e:
+                                            print(f"      ⚠ Step {ci+1}: "
+                                                  f"{str(e).splitlines()[0][:60]}")
+
+                                        steps.append(step)
+
+                                    nc = sum(1 for s in steps
+                                             if s.get('config'))
+                                    print(
+                                        f"    ✓ '{rname}': "
+                                        f"[{'ON' if enabled=='ENABLED' else 'OFF'}] "
+                                        f"{len(steps)} steps, "
+                                        f"{nc} with deep config")
 
                                     driver.get(data['automation_url'])
-                                    time.sleep(3)
+                                    try:
+                                        WebDriverWait(driver, 15, poll_frequency=0.5).until(
+                                            lambda d: (d.execute_script(
+                                                "return document.querySelectorAll("
+                                                "'table tbody tr').length") or 0) > 0)
+                                    except Exception:
+                                        time.sleep(1)
                                 except Exception as e:
-                                    print(f"    ⚠ '{rname}': {str(e).splitlines()[0][:80]}")
+                                    print(f"    ⚠ '{rname}': "
+                                          f"{str(e).splitlines()[0][:80]}")
                                     driver.get(data['automation_url'])
-                                    time.sleep(3)
+                                    try:
+                                        WebDriverWait(driver, 15, poll_frequency=0.5).until(
+                                            lambda d: (d.execute_script(
+                                                "return document.querySelectorAll("
+                                                "'table tbody tr').length") or 0) > 0)
+                                    except Exception:
+                                        time.sleep(1)
 
                             data['automations'].append({
                                 'name': rname,
                                 'enabled': ('✅' if enabled == 'ENABLED'
                                            else '❌' if enabled == 'DISABLED'
                                            else '—'),
-                                'trigger': trigger[:150],
-                                'conditions': conditions[:300],
-                                'actions': actions[:300],
+                                'steps': steps,
+                                'url': rhref,
                             })
 
                         if data['automations']:
@@ -1202,12 +1983,72 @@ def generate_markdown(data: dict, project_key: str) -> str:
     h(2, "12. Automation Rules")
     automations = data.get('automations', [])
     auto_url    = data.get('automation_url', '')
+    if auto_url:
+        p(f"> 📎 [View all rules in Jira]({auto_url})\n")
+
+    _STEP_ICONS = {
+        'TRIGGER': '🔔', 'CONDITION': '🔀',
+        'BRANCH': '🔀',  'ACTION': '⚡',
+    }
+
     if automations:
-        p(_md_table(
-            ["Rule Name", "Enabled", "Trigger", "Conditions", "Actions"],
-            [[a['name'], a['enabled'], a['trigger'], a['conditions'], a['actions']]
-             for a in automations]
-        ))
+        for ai, rule in enumerate(automations, 1):
+            rname   = rule['name']
+            badge   = rule['enabled']
+            steps   = rule.get('steps', [])
+
+            h(3, f"12.{ai} Rule: `{rname}`  {badge}")
+
+            # ── Legacy flat format (backward compat with old JSON) ──
+            if not steps and (rule.get('trigger') or rule.get('conditions')
+                              or rule.get('actions')):
+                rows = []
+                if rule.get('trigger') and rule['trigger'] != '—':
+                    rows.append(['🔔 TRIGGER', rule['trigger']])
+                if rule.get('conditions') and rule['conditions'] != '—':
+                    for c in rule['conditions'].split('; '):
+                        rows.append(['🔀 CONDITION', c])
+                if rule.get('actions') and rule['actions'] != '—':
+                    for a in rule['actions'].split('; '):
+                        rows.append(['⚡ ACTION', a])
+                if rows:
+                    p(_md_table(["Type", "Description"], rows))
+                else:
+                    p("*No details available.*")
+                continue
+
+            if not steps:
+                rule_url = rule.get('url', '')
+                if rule_url:
+                    p(f"*Could not extract details — "
+                      f"[view rule in Jira]({rule_url})*")
+                else:
+                    p("*No details available.*")
+                continue
+
+            # ── Step overview table ──
+            summary_rows = [
+                [
+                    s['order'],
+                    f"{_STEP_ICONS.get(s['type'], '❓')} {s['type']}",
+                    s.get('summary', '—') or '—',
+                ]
+                for s in steps
+            ]
+            p(_md_table(["#", "Type", "Component"], summary_rows))
+
+            # ── Per-step configuration details ──
+            for s in steps:
+                if not s.get('config'):
+                    continue
+                icon = _STEP_ICONS.get(s['type'], '❓')
+                summary_short = (s.get('summary', '') or '')[:100]
+                p(f"\n**Step {s['order']} — {icon} {s['type']}:"
+                  f" {summary_short}**")
+                p(_md_table(
+                    ["Field", "Value"],
+                    [[c['field'], c['value']] for c in s['config']]
+                ))
     else:
         p("*No automation rules found or could not be retrieved.*")
         if auto_url:
