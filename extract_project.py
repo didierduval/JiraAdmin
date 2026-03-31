@@ -26,7 +26,8 @@ except ImportError:
 JIRA_SERVER     = os.environ.get('JIRA_SERVER', 'https://fifo24.atlassian.net')
 JIRA_EMAIL      = os.environ.get('JIRA_EMAIL', '')
 JIRA_API_TOKEN  = os.environ.get('JIRA_API_TOKEN', '')
-PROJECT_KEY     = os.environ.get('PROJECT_KEY', 'DPR')
+PROJECT_KEYS    = os.environ.get('PROJECT_KEYS', 'DPR,INC,AM').split(',')
+PROJECT_KEY     = PROJECT_KEYS[0]   # default for single-project helpers
 
 # ── Atlassian login for automation page (Selenium) ────────────────────
 JIRA_PASSWORD   = os.environ.get('JIRA_PASSWORD', '')
@@ -1763,10 +1764,35 @@ def fetch_project_architecture(project_key: str) -> dict | None:
 
 
 # ──────────────────────────────────────────
-# Markdown Report Generator
+# Markdown Report Generators
 # ──────────────────────────────────────────
 
-def generate_markdown(data: dict, project_key: str) -> str:
+# Keys for content vs config split
+_CONTENT_KEYS = {
+    'name', 'key', 'type', 'lead', 'description', 'url',
+    'total_issues', 'stats', 'epic_type', 'epics',
+    'components', 'versions', 'boards',
+}
+_CONFIG_KEYS = {
+    'name', 'key', 'type', 'lead', 'description', 'url',
+    'issue_types', 'roles',
+    'permission_scheme', 'notification_scheme', 'security_scheme',
+    'workflow_scheme_name', 'issue_type_workflow_map', 'workflows',
+    'screen_scheme_name', 'screens',
+    'field_config_scheme', 'field_configs',
+    'automations', 'automation_url',
+}
+
+
+def _split_data(data: dict) -> tuple[dict, dict]:
+    """Split the fetched project data into content and config dicts."""
+    content = {k: v for k, v in data.items() if k in _CONTENT_KEYS}
+    config  = {k: v for k, v in data.items() if k in _CONFIG_KEYS}
+    return content, config
+
+
+def generate_content_markdown(data: dict, project_key: str) -> str:
+    """Generate the *space-content* report: overview, statistics, epics, components, versions, boards."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = []
 
@@ -1777,7 +1803,7 @@ def generate_markdown(data: dict, project_key: str) -> str:
         lines.append(text)
 
     # ── Title ──────────────────────────────────────────────────────────────
-    lines.append(f"# 📋 Jira Project Report — {data['name']} (`{data['key']}`)")
+    lines.append(f"# 📋 Jira Project Content — {data['name']} (`{data['key']}`)")
     p(f"> Generated on **{now}** · [Open in Jira]({data['url']})")
 
     # ── 1. Project Overview ────────────────────────────────────────────────
@@ -1785,59 +1811,48 @@ def generate_markdown(data: dict, project_key: str) -> str:
     p(_md_table(
         ["Field", "Value"],
         [
-            ["Name",                  data['name']],
-            ["Key",                   data['key']],
-            ["Type",                  data['type']],
-            ["Lead",                  data['lead']],
-            ["Description",           data['description']],
-            ["Total Issues",          data['total_issues']],
-            ["Permission Scheme",     data['permission_scheme']],
-            ["Notification Scheme",   data['notification_scheme']],
-            ["Security Scheme",       data['security_scheme']],
+            ["Name",         data['name']],
+            ["Key",          data['key']],
+            ["Type",         data['type']],
+            ["Lead",         data['lead']],
+            ["Description",  data['description']],
+            ["Total Issues", data['total_issues']],
         ]
     ))
 
-    # ── 2. Issue Types ─────────────────────────────────────────────────────
-    h(2, "2. Issue Types")
-    if data['issue_types']:
-        rows = [[it['name'], it['description'] or '—'] for it in data['issue_types']]
-        p(_md_table(["Issue Type", "Description"], rows))
-    else:
-        p("*No issue types configured.*")
-
-    # ── 3. Issue Statistics ────────────────────────────────────────────────
-    h(2, "3. Issue Statistics")
+    # ── 2. Issue Statistics ────────────────────────────────────────────────
+    h(2, "2. Issue Statistics")
     stats = data['stats']
     total = data['total_issues'] or 1   # avoid div/0
 
-    h(3, "3.1 By Type")
+    h(3, "2.1 By Type")
     p(_md_table(
         ["Type", "Count", "Share"],
         [[k, v, _bar(v, total)] for k, v in stats['by_type'].items()]
     ))
 
-    h(3, "3.2 By Status")
+    h(3, "2.2 By Status")
     p(_md_table(
         ["Status", "Count", "Share"],
         [[k, v, _bar(v, total)] for k, v in stats['by_status'].items()]
     ))
 
-    h(3, "3.3 By Priority")
+    h(3, "2.3 By Priority")
     p(_md_table(
         ["Priority", "Count", "Share"],
         [[k, v, _bar(v, total)] for k, v in stats['by_priority'].items()]
     ))
 
-    h(3, "3.4 By Assignee  *(top 15)*")
+    h(3, "2.4 By Assignee  *(top 15)*")
     top_assignees = list(stats['by_assignee'].items())[:15]
     p(_md_table(
         ["Assignee", "Count", "Share"],
         [[k, v, _bar(v, total)] for k, v in top_assignees]
     ))
 
-    # ── 4. Epics ───────────────────────────────────────────────────────────
+    # ── 3. Epics ───────────────────────────────────────────────────────────
     epic_type = data.get('epic_type', 'Epic')
-    h(2, f"4. {epic_type}s  (High-Level Architecture)")
+    h(2, f"3. {epic_type}s  (High-Level Architecture)")
     if data['epics']:
         rows = [
             [e['key'], e['summary'], e['status'], e['priority'], e['assignee']]
@@ -1847,16 +1862,16 @@ def generate_markdown(data: dict, project_key: str) -> str:
     else:
         p("*No epics found.*")
 
-    # ── 5. Components ──────────────────────────────────────────────────────
-    h(2, "5. Components")
+    # ── 4. Components ──────────────────────────────────────────────────────
+    h(2, "4. Components")
     if data['components']:
         rows = [[c['name'], c['lead'], c['description'] or '—'] for c in data['components']]
         p(_md_table(["Component", "Lead", "Description"], rows))
     else:
         p("*No components configured.*")
 
-    # ── 6. Versions / Releases ─────────────────────────────────────────────
-    h(2, "6. Versions / Releases")
+    # ── 5. Versions / Releases ─────────────────────────────────────────────
+    h(2, "5. Versions / Releases")
     if data['versions']:
         rows = [
             [v['name'], v['released'], v['release_date'], v['description'] or '—']
@@ -1866,8 +1881,8 @@ def generate_markdown(data: dict, project_key: str) -> str:
     else:
         p("*No versions configured.*")
 
-    # ── 7. Boards & Sprints ────────────────────────────────────────────────
-    h(2, "7. Boards & Sprints")
+    # ── 6. Boards & Sprints ────────────────────────────────────────────────
+    h(2, "6. Boards & Sprints")
     if data['boards']:
         for board in data['boards']:
             h(3, f"Board: {board['name']}  `[{board['type'].upper()}]`")
@@ -1883,9 +1898,52 @@ def generate_markdown(data: dict, project_key: str) -> str:
     else:
         p("*No boards found.*")
 
-    # ── 8. Project Roles & Members ─────────────────────────────────────────
-    h(2, "8. Project Roles & Members")
-    if data['roles']:
+    p(f"\n---\n*Content report generated by `extract_project.py` on {now}*")
+    return "\n".join(lines)
+
+
+def generate_config_markdown(data: dict, project_key: str) -> str:
+    """Generate the *configuration* report: issue types, roles, schemes, workflows, screens, fields, automations."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = []
+
+    def h(level, text):
+        lines.append(f"\n{'#' * level} {text}\n")
+
+    def p(text=""):
+        lines.append(text)
+
+    # ── Title ──────────────────────────────────────────────────────────────
+    lines.append(f"# ⚙️ Jira Project Configuration — {data['name']} (`{data['key']}`)")
+    p(f"> Generated on **{now}** · [Open in Jira]({data['url']})")
+
+    # ── 1. Project Overview ────────────────────────────────────────────────
+    h(2, "1. Project Overview")
+    p(_md_table(
+        ["Field", "Value"],
+        [
+            ["Name",                  data['name']],
+            ["Key",                   data['key']],
+            ["Type",                  data['type']],
+            ["Lead",                  data['lead']],
+            ["Description",           data['description']],
+            ["Permission Scheme",     data.get('permission_scheme', 'N/A')],
+            ["Notification Scheme",   data.get('notification_scheme', 'N/A')],
+            ["Security Scheme",       data.get('security_scheme', 'N/A')],
+        ]
+    ))
+
+    # ── 2. Issue Types ─────────────────────────────────────────────────────
+    h(2, "2. Issue Types")
+    if data.get('issue_types'):
+        rows = [[it['name'], it['description'] or '—'] for it in data['issue_types']]
+        p(_md_table(["Issue Type", "Description"], rows))
+    else:
+        p("*No issue types configured.*")
+
+    # ── 3. Project Roles & Members ─────────────────────────────────────────
+    h(2, "3. Project Roles & Members")
+    if data.get('roles'):
         rows = [
             [role, ", ".join(members) if members else "*(empty)*"]
             for role, members in data['roles'].items()
@@ -1894,19 +1952,19 @@ def generate_markdown(data: dict, project_key: str) -> str:
     else:
         p("*No role data available.*")
 
-    # ── 9. Workflow Configuration ──────────────────────────────────────────
-    h(2, "9. Workflow Configuration")
+    # ── 4. Workflow Configuration ──────────────────────────────────────────
+    h(2, "4. Workflow Configuration")
     p(f"**Workflow Scheme:** `{data.get('workflow_scheme_name', 'N/A')}`\n")
 
     if data.get('issue_type_workflow_map'):
-        h(3, "9.1 Issue Type → Workflow Mapping")
+        h(3, "4.1 Issue Type → Workflow Mapping")
         p(_md_table(
             ["Issue Type", "Workflow"],
             [[it, wf] for it, wf in data['issue_type_workflow_map']]
         ))
 
     for wf_name, wf in data.get('workflows', {}).items():
-        h(3, f"9.x Workflow: `{wf_name}`")
+        h(3, f"4.x Workflow: `{wf_name}`")
 
         # Statuses
         p("**Statuses:**")
@@ -1928,8 +1986,8 @@ def generate_markdown(data: dict, project_key: str) -> str:
         else:
             p("*No transitions found.*")
 
-    # ── 10. Screens & Fields ───────────────────────────────────────────────
-    h(2, "10. Screens & Fields")
+    # ── 5. Screens & Fields ───────────────────────────────────────────────
+    h(2, "5. Screens & Fields")
     p(f"**Screen Scheme:** `{data.get('screen_scheme_name', 'N/A')}`\n")
 
     screens = data.get('screens', {})
@@ -1954,8 +2012,8 @@ def generate_markdown(data: dict, project_key: str) -> str:
     else:
         p("*No screen configuration found.*")
 
-    # ── 11. Field Configuration ────────────────────────────────────────────
-    h(2, "11. Field Configuration")
+    # ── 6. Field Configuration ────────────────────────────────────────────
+    h(2, "6. Field Configuration")
     p(f"**Field Config Scheme:** `{data.get('field_config_scheme', 'N/A')}`\n")
 
     field_configs = data.get('field_configs', {})
@@ -1979,8 +2037,8 @@ def generate_markdown(data: dict, project_key: str) -> str:
     else:
         p("*No field configuration found.*")
 
-    # ── 12. Automation Rules ───────────────────────────────────────────────
-    h(2, "12. Automation Rules")
+    # ── 7. Automation Rules ───────────────────────────────────────────────
+    h(2, "7. Automation Rules")
     automations = data.get('automations', [])
     auto_url    = data.get('automation_url', '')
     if auto_url:
@@ -1997,7 +2055,7 @@ def generate_markdown(data: dict, project_key: str) -> str:
             badge   = rule['enabled']
             steps   = rule.get('steps', [])
 
-            h(3, f"12.{ai} Rule: `{rname}`  {badge}")
+            h(3, f"7.{ai} Rule: `{rname}`  {badge}")
 
             # ── Legacy flat format (backward compat with old JSON) ──
             if not steps and (rule.get('trigger') or rule.get('conditions')
@@ -2054,8 +2112,16 @@ def generate_markdown(data: dict, project_key: str) -> str:
         if auto_url:
             p(f"\n> 📎 **View rules directly:** [{auto_url}]({auto_url})")
 
-    p(f"\n---\n*Report generated by `extract_project.py` on {now}*")
+    p(f"\n---\n*Configuration report generated by `extract_project.py` on {now}*")
     return "\n".join(lines)
+
+
+# Backward-compatible: generate a single combined markdown report
+def generate_markdown(data: dict, project_key: str) -> str:
+    """Return both content + config as a single markdown string."""
+    content_md = generate_content_markdown(data, project_key)
+    config_md  = generate_config_markdown(data, project_key)
+    return content_md + "\n\n" + config_md
 
 
 # ──────────────────────────────────────────
@@ -2063,25 +2129,45 @@ def generate_markdown(data: dict, project_key: str) -> str:
 # ──────────────────────────────────────────
 
 if __name__ == "__main__":
-    print(f"\n🔍 Fetching full configuration for project: {PROJECT_KEY}")
-    print("=" * 55)
+    for pk in PROJECT_KEYS:
+        pk = pk.strip()
+        if not pk:
+            continue
 
-    project_data = fetch_project_architecture(PROJECT_KEY)
+        print(f"\n{'=' * 55}")
+        print(f"🔍 Fetching full configuration for project: {pk}")
+        print("=" * 55)
 
-    if project_data:
-        output_file = 'jira_current_state.md'
-        md = generate_markdown(project_data, PROJECT_KEY)
+        project_data = fetch_project_architecture(pk)
 
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(md)
+        if project_data:
+            # ── Split data ─────────────────────────────────────────
+            content_data, config_data = _split_data(project_data)
 
-        # Also dump the raw data as JSON for further programmatic use
-        json_file = 'jira_current_state.json'
-        with open(json_file, 'w', encoding='utf-8') as f:
-            json.dump(project_data, f, indent=2, default=str)
+            # ── Content report (space data) ────────────────────────
+            content_md_file = f'{pk}_content.md'
+            content_md = generate_content_markdown(project_data, pk)
+            with open(content_md_file, 'w', encoding='utf-8') as f:
+                f.write(content_md)
 
-        print(f"\n✅  Markdown report  → {output_file}")
-        print(f"✅  Raw JSON data    → {json_file}")
-        print("\nOpen the markdown file in PyCharm and ask Copilot Chat to analyse it.")
-    else:
-        print("\n❌  Failed to fetch project data. Check credentials and project key.")
+            content_json_file = f'{pk}_content.json'
+            with open(content_json_file, 'w', encoding='utf-8') as f:
+                json.dump(content_data, f, indent=2, default=str)
+
+            # ── Configuration report ───────────────────────────────
+            config_md_file = f'{pk}_config.md'
+            config_md = generate_config_markdown(project_data, pk)
+            with open(config_md_file, 'w', encoding='utf-8') as f:
+                f.write(config_md)
+
+            config_json_file = f'{pk}_config.json'
+            with open(config_json_file, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2, default=str)
+
+            print(f"\n✅  Content report   → {content_md_file}  /  {content_json_file}")
+            print(f"✅  Config report    → {config_md_file}  /  {config_json_file}")
+        else:
+            print(f"\n❌  Failed to fetch project data for {pk}. Check credentials and project key.")
+
+    print("\n🎉 All projects processed.")
+    print("Open the markdown files in PyCharm and ask Copilot Chat to analyse them.")

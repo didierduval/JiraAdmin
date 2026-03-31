@@ -1,0 +1,771 @@
+{
+  "cloud": true,
+  "rules": [
+    {
+      "id": 4056666,
+      "clientKey": "81032943-5c63-4c79-8d40-f618584cc6a4",
+      "name": "DPR: Auto-Generate Close-Out Approvals",
+      "state": "ENABLED",
+      "description": "",
+      "authorAccountId": "712020:1ec0e6dc-ca11-444f-9758-f855195c2470",
+      "actor": {
+        "type": "ACCOUNT_ID",
+        "value": "557058:f58131cb-b67d-43c7-b30d-6b58d40bd077"
+      },
+      "created": 1774719714283,
+      "updated": 1774828177799,
+      "trigger": {
+        "id": "8f0eedea-f6cd-48fa-99ff-5b4d0abe632a",
+        "parentId": null,
+        "conditionParentId": null,
+        "component": "TRIGGER",
+        "type": "jira.issue.event.trigger:transitioned",
+        "value": {
+          "eventFilters": [
+            "ari:cloud:jira:ef9e5cf7-7229-4edf-955f-770043655854:project/10035"
+          ],
+          "fromStatus": [],
+          "toStatus": [
+            {
+              "type": "NAME",
+              "value": "Close-Out (CO)"
+            }
+          ],
+          "eventKey": "jira:issue_updated",
+          "issueEvent": "issue_generic"
+        },
+        "conditions": [
+          {
+            "id": "fba4d7c1-4e6a-4587-b44e-351e3f86363b",
+            "parentId": null,
+            "conditionParentId": "8f0eedea-f6cd-48fa-99ff-5b4d0abe632a",
+            "component": "CONDITION",
+            "type": "jira.issue.condition",
+            "value": {
+              "selectedField": {
+                "type": "ID",
+                "value": "issuetype"
+              },
+              "selectedFieldType": "issuetype",
+              "comparison": "EQUALS",
+              "compareValue": {
+                "type": "ID",
+                "modifier": null,
+                "value": "10000",
+                "multiValue": false,
+                "source": null
+              }
+            },
+            "conditions": [],
+            "children": [],
+            "schemaVersion": 3,
+            "connectionId": null,
+            "checksum": null
+          }
+        ],
+        "children": [],
+        "schemaVersion": 1,
+        "connectionId": null,
+        "checksum": null
+      },
+      "components": [
+        {
+          "id": "a1ecacbe-3f06-4c6a-8a71-9a2b2cde97e4",
+          "parentId": null,
+          "conditionParentId": null,
+          "component": "ACTION",
+          "type": "jira.issue.create",
+          "value": {
+            "operations": [
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "summary"
+                },
+                "fieldType": "summary",
+                "type": "SET",
+                "value": "Base Approval: DPR Owner for {{issue.key}}"
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "description"
+                },
+                "fieldType": "description",
+                "type": "SET",
+                "value": null
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "project"
+                },
+                "fieldType": "project",
+                "type": "SET",
+                "value": {
+                  "value": "current",
+                  "type": "COPY"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "issuetype"
+                },
+                "fieldType": "issuetype",
+                "type": "SET",
+                "value": {
+                  "type": "ID",
+                  "value": "10013"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "parent"
+                },
+                "fieldType": "parent",
+                "type": "SET",
+                "value": {
+                  "type": "COPY",
+                  "value": "current"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "labels"
+                },
+                "fieldType": "labels",
+                "type": "SET",
+                "value": [
+                  {
+                    "type": "FREE",
+                    "value": "Approval"
+                  }
+                ]
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "assignee"
+                },
+                "fieldType": "assignee",
+                "type": "SET",
+                "value": {
+                  "type": "COPY",
+                  "value": "trigger"
+                }
+              }
+            ],
+            "advancedFields": null,
+            "sendNotifications": false
+          },
+          "conditions": [],
+          "children": [],
+          "schemaVersion": 12,
+          "connectionId": null,
+          "checksum": null
+        },
+        {
+          "id": "12d80d44-194e-4b00-b93b-88576adeb9d4",
+          "parentId": null,
+          "conditionParentId": null,
+          "component": "ACTION",
+          "type": "jira.lookup.issues",
+          "value": {
+            "id": "_customsmartvalue_id_1774823824200",
+            "name": {
+              "type": "FREE",
+              "value": "lookupIssues"
+            },
+            "type": "JQL",
+            "query": {
+              "type": "SMART",
+              "value": "   project = AM AND summary ~ \"{{issue.components.first.name}}\" AND summary ~ \"Reliability Engineer\""
+            },
+            "lazy": false
+          },
+          "conditions": [],
+          "children": [],
+          "schemaVersion": 1,
+          "connectionId": null,
+          "checksum": null
+        },
+        {
+          "id": "93e2936a-f117-4296-acfc-3dc57d07a1a6",
+          "parentId": null,
+          "conditionParentId": null,
+          "component": "ACTION",
+          "type": "jira.issue.create",
+          "value": {
+            "operations": [
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "summary"
+                },
+                "fieldType": "summary",
+                "type": "SET",
+                "value": "Base Approval: Reliability Engineer for {{issue.key}}"
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "description"
+                },
+                "fieldType": "description",
+                "type": "SET",
+                "value": null
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "project"
+                },
+                "fieldType": "project",
+                "type": "SET",
+                "value": {
+                  "value": "current",
+                  "type": "COPY"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "issuetype"
+                },
+                "fieldType": "issuetype",
+                "type": "SET",
+                "value": {
+                  "type": "ID",
+                  "value": "10013"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "parent"
+                },
+                "fieldType": "parent",
+                "type": "SET",
+                "value": {
+                  "type": "COPY",
+                  "value": "current"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "labels"
+                },
+                "fieldType": "labels",
+                "type": "SET",
+                "value": [
+                  {
+                    "type": "FREE",
+                    "value": "Approval"
+                  }
+                ]
+              }
+            ],
+            "advancedFields": "   { \"fields\": { \"assignee\": { \"accountId\": \"{{lookupIssues.first.assignee.accountId}}\" } } }",
+            "sendNotifications": false
+          },
+          "conditions": [],
+          "children": [],
+          "schemaVersion": 12,
+          "connectionId": null,
+          "checksum": null
+        },
+        {
+          "id": "0cb12383-8d45-4db0-b149-7eb7bd4ed4ae",
+          "parentId": null,
+          "conditionParentId": null,
+          "component": "ACTION",
+          "type": "jira.issue.create",
+          "value": {
+            "operations": [
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "summary"
+                },
+                "fieldType": "summary",
+                "type": "SET",
+                "value": "Base Approval: Quality Engineer for {{issue.key}}"
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "description"
+                },
+                "fieldType": "description",
+                "type": "SET",
+                "value": null
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "project"
+                },
+                "fieldType": "project",
+                "type": "SET",
+                "value": {
+                  "value": "current",
+                  "type": "COPY"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "issuetype"
+                },
+                "fieldType": "issuetype",
+                "type": "SET",
+                "value": {
+                  "type": "ID",
+                  "value": "10013"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "parent"
+                },
+                "fieldType": "parent",
+                "type": "SET",
+                "value": {
+                  "type": "COPY",
+                  "value": "current"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "labels"
+                },
+                "fieldType": "labels",
+                "type": "SET",
+                "value": [
+                  {
+                    "type": "NAME",
+                    "value": "Approval"
+                  }
+                ]
+              }
+            ],
+            "advancedFields": null,
+            "sendNotifications": false
+          },
+          "conditions": [],
+          "children": [],
+          "schemaVersion": 12,
+          "connectionId": null,
+          "checksum": null
+        },
+        {
+          "id": "44db96e3-84b3-459b-b77f-11f836b9eb99",
+          "parentId": null,
+          "conditionParentId": null,
+          "component": "ACTION",
+          "type": "jira.issue.create",
+          "value": {
+            "operations": [
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "summary"
+                },
+                "fieldType": "summary",
+                "type": "SET",
+                "value": "Base Approval: System Engineer for {{issue.key}}"
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "description"
+                },
+                "fieldType": "description",
+                "type": "SET",
+                "value": null
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "project"
+                },
+                "fieldType": "project",
+                "type": "SET",
+                "value": {
+                  "value": "current",
+                  "type": "COPY"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "issuetype"
+                },
+                "fieldType": "issuetype",
+                "type": "SET",
+                "value": {
+                  "type": "ID",
+                  "value": "10013"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "parent"
+                },
+                "fieldType": "parent",
+                "type": "SET",
+                "value": {
+                  "type": "COPY",
+                  "value": "current"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "labels"
+                },
+                "fieldType": "labels",
+                "type": "SET",
+                "value": [
+                  {
+                    "type": "NAME",
+                    "value": "Approval"
+                  }
+                ]
+              }
+            ],
+            "advancedFields": null,
+            "sendNotifications": false
+          },
+          "conditions": [],
+          "children": [],
+          "schemaVersion": 12,
+          "connectionId": null,
+          "checksum": null
+        },
+        {
+          "id": "38e56d05-e55f-4506-a651-c0041d1a408d",
+          "parentId": null,
+          "conditionParentId": null,
+          "component": "ACTION",
+          "type": "jira.lookup.issues",
+          "value": {
+            "id": "_customsmartvalue_id_1774823824200",
+            "name": {
+              "type": "FREE",
+              "value": "lookupIssues"
+            },
+            "type": "JQL",
+            "query": {
+              "type": "SMART",
+              "value": "project = AM AND summary ~ \"{{issue.components.first.name}}\" AND summary ~ \"Project Lead\""
+            },
+            "lazy": false
+          },
+          "conditions": [],
+          "children": [],
+          "schemaVersion": 1,
+          "connectionId": null,
+          "checksum": null
+        },
+        {
+          "id": "1afbb766-f6cf-4e66-87f0-a27005f93cb0",
+          "parentId": null,
+          "conditionParentId": null,
+          "component": "ACTION",
+          "type": "jira.issue.create",
+          "value": {
+            "operations": [
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "summary"
+                },
+                "fieldType": "summary",
+                "type": "SET",
+                "value": "Base Approval: Project Lead for {{issue.key}}"
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "description"
+                },
+                "fieldType": "description",
+                "type": "SET",
+                "value": null
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "project"
+                },
+                "fieldType": "project",
+                "type": "SET",
+                "value": {
+                  "value": "current",
+                  "type": "COPY"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "issuetype"
+                },
+                "fieldType": "issuetype",
+                "type": "SET",
+                "value": {
+                  "type": "ID",
+                  "value": "10013"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "parent"
+                },
+                "fieldType": "parent",
+                "type": "SET",
+                "value": {
+                  "type": "COPY",
+                  "value": "current"
+                }
+              },
+              {
+                "field": {
+                  "type": "ID",
+                  "value": "labels"
+                },
+                "fieldType": "labels",
+                "type": "SET",
+                "value": [
+                  {
+                    "type": "NAME",
+                    "value": "Approval"
+                  }
+                ]
+              }
+            ],
+            "advancedFields": "   { \"fields\": { \"assignee\": { \"accountId\": \"{{lookupIssues.first.assignee.accountId}}\" } } }",
+            "sendNotifications": false
+          },
+          "conditions": [],
+          "children": [],
+          "schemaVersion": 12,
+          "connectionId": null,
+          "checksum": null
+        },
+        {
+          "id": "dced12a5-fa0f-4db6-9109-263e4c908e17",
+          "parentId": null,
+          "conditionParentId": null,
+          "component": "CONDITION",
+          "type": "jira.condition.container.block",
+          "value": null,
+          "conditions": [],
+          "children": [
+            {
+              "id": "47ad3eaf-c5d6-45d2-82da-abe1d28bf9ef",
+              "parentId": "dced12a5-fa0f-4db6-9109-263e4c908e17",
+              "conditionParentId": null,
+              "component": "CONDITION_BLOCK",
+              "type": "jira.condition.if.block",
+              "value": {
+                "conditionMatchType": "ALL"
+              },
+              "conditions": [
+                {
+                  "id": "9d2ee62a-7aa5-4857-ac27-cb21ec3843c6",
+                  "parentId": null,
+                  "conditionParentId": "47ad3eaf-c5d6-45d2-82da-abe1d28bf9ef",
+                  "component": "CONDITION",
+                  "type": "jira.issue.condition",
+                  "value": {
+                    "selectedField": {
+                      "type": "NAME",
+                      "value": "DPR Type"
+                    },
+                    "selectedFieldType": "com.atlassian.jira.plugin.system.customfieldtypes:select",
+                    "comparison": "EQUALS",
+                    "compareValue": {
+                      "type": "NAME",
+                      "modifier": null,
+                      "value": "Supplier",
+                      "multiValue": false,
+                      "source": null
+                    }
+                  },
+                  "conditions": [],
+                  "children": [],
+                  "schemaVersion": 3,
+                  "connectionId": null,
+                  "checksum": null
+                }
+              ],
+              "children": [
+                {
+                  "id": "09930b0d-84e8-4aeb-8992-d2eba4425631",
+                  "parentId": "47ad3eaf-c5d6-45d2-82da-abe1d28bf9ef",
+                  "conditionParentId": null,
+                  "component": "ACTION",
+                  "type": "jira.lookup.issues",
+                  "value": {
+                    "id": "_customsmartvalue_id_1774823946755",
+                    "name": {
+                      "type": "FREE",
+                      "value": "lookupIssues"
+                    },
+                    "type": "JQL",
+                    "query": {
+                      "type": "SMART",
+                      "value": "project = AM AND summary ~ \"{{issue.components.first.name}}\" AND summary ~ \"{{issue.DPR Type.value}}\""
+                    },
+                    "lazy": false
+                  },
+                  "conditions": [],
+                  "children": [],
+                  "schemaVersion": 1,
+                  "connectionId": null,
+                  "checksum": null
+                },
+                {
+                  "id": "08e142dc-72ce-40c5-82cc-73eba559a5ce",
+                  "parentId": "47ad3eaf-c5d6-45d2-82da-abe1d28bf9ef",
+                  "conditionParentId": null,
+                  "component": "ACTION",
+                  "type": "jira.issue.create",
+                  "value": {
+                    "operations": [
+                      {
+                        "field": {
+                          "type": "ID",
+                          "value": "summary"
+                        },
+                        "fieldType": "summary",
+                        "type": "SET",
+                        "value": "Supplier Approval Required for {{issue.key}}"
+                      },
+                      {
+                        "field": {
+                          "type": "ID",
+                          "value": "description"
+                        },
+                        "fieldType": "description",
+                        "type": "SET",
+                        "value": null
+                      },
+                      {
+                        "field": {
+                          "type": "ID",
+                          "value": "project"
+                        },
+                        "fieldType": "project",
+                        "type": "SET",
+                        "value": {
+                          "value": "current",
+                          "type": "COPY"
+                        }
+                      },
+                      {
+                        "field": {
+                          "type": "ID",
+                          "value": "issuetype"
+                        },
+                        "fieldType": "issuetype",
+                        "type": "SET",
+                        "value": {
+                          "type": "ID",
+                          "value": "10013"
+                        }
+                      },
+                      {
+                        "field": {
+                          "type": "ID",
+                          "value": "parent"
+                        },
+                        "fieldType": "parent",
+                        "type": "SET",
+                        "value": {
+                          "type": "COPY",
+                          "value": "current"
+                        }
+                      },
+                      {
+                        "field": {
+                          "type": "ID",
+                          "value": "labels"
+                        },
+                        "fieldType": "labels",
+                        "type": "SET",
+                        "value": [
+                          {
+                            "type": "NAME",
+                            "value": "Approval"
+                          }
+                        ]
+                      }
+                    ],
+                    "advancedFields": "   { \"fields\": { \"assignee\": { \"accountId\": \"{{lookupIssues.first.assignee.accountId}}\" } } }",
+                    "sendNotifications": false
+                  },
+                  "conditions": [],
+                  "children": [],
+                  "schemaVersion": 12,
+                  "connectionId": null,
+                  "checksum": null
+                }
+              ],
+              "schemaVersion": 1,
+              "connectionId": null,
+              "checksum": null
+            }
+          ],
+          "schemaVersion": 1,
+          "connectionId": null,
+          "checksum": null
+        }
+      ],
+      "canOtherRuleTrigger": false,
+      "notifyOnError": "FIRSTERROR",
+      "projects": [],
+      "labels": [],
+      "tags": [
+        {
+          "id": 8230056,
+          "ruleIdUuid": "019d3589-c3eb-7b91-a469-9f349468664e",
+          "tagType": "IS_RULE_UPDATED",
+          "tagValue": "true"
+        }
+      ],
+      "ruleScope": {
+        "resources": [
+          "ari:cloud:jira:ef9e5cf7-7229-4edf-955f-770043655854:project/10035"
+        ]
+      },
+      "ruleHome": {
+        "ruleLifecycleHome": {
+          "locationARI": "ari:cloud:jira:ef9e5cf7-7229-4edf-955f-770043655854:project/10035"
+        },
+        "ruleBillingHome": {
+          "locationARI": "ari:cloud:jira-software::site/ef9e5cf7-7229-4edf-955f-770043655854"
+        }
+      },
+      "writeAccessType": "OWNER_ONLY",
+      "collaborators": [],
+      "billingType": "NORMAL",
+      "idUuid": "019d3589-c3eb-7b91-a469-9f349468664e",
+      "partitionId": "81032943-5c63-4c79-8d40-f618584cc6a4",
+      "checksum": {
+        "version": 3,
+        "value": "5dc112e38d4e1ab824ca359176f65839dd33d9485bce62ce86be58f8fb2a6c02"
+      },
+      "currentVersionId": null
+    }
+  ]
+}
