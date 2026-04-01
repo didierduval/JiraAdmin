@@ -2129,6 +2129,10 @@ def generate_markdown(data: dict, project_key: str) -> str:
 # ──────────────────────────────────────────
 
 if __name__ == "__main__":
+    # Output directory — always write into spaces/ beside this script
+    _SPACES_DIR = Path(__file__).parent / 'spaces'
+    _SPACES_DIR.mkdir(exist_ok=True)
+
     for pk in PROJECT_KEYS:
         pk = pk.strip()
         if not pk:
@@ -2145,22 +2149,22 @@ if __name__ == "__main__":
             content_data, config_data = _split_data(project_data)
 
             # ── Content report (space data) ────────────────────────
-            content_md_file = f'{pk}_content.md'
+            content_md_file = _SPACES_DIR / f'{pk}_content.md'
             content_md = generate_content_markdown(project_data, pk)
             with open(content_md_file, 'w', encoding='utf-8') as f:
                 f.write(content_md)
 
-            content_json_file = f'{pk}_content.json'
+            content_json_file = _SPACES_DIR / f'{pk}_content.json'
             with open(content_json_file, 'w', encoding='utf-8') as f:
                 json.dump(content_data, f, indent=2, default=str)
 
             # ── Configuration report ───────────────────────────────
-            config_md_file = f'{pk}_config.md'
+            config_md_file = _SPACES_DIR / f'{pk}_config.md'
             config_md = generate_config_markdown(project_data, pk)
             with open(config_md_file, 'w', encoding='utf-8') as f:
                 f.write(config_md)
 
-            config_json_file = f'{pk}_config.json'
+            config_json_file = _SPACES_DIR / f'{pk}_config.json'
             with open(config_json_file, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=2, default=str)
 
